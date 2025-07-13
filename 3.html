@@ -1,0 +1,218 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8">
+  <title>网络流量追踪仪表盘</title>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+  <style>
+    body {
+      font-family: "Segoe UI", sans-serif;
+      background-color: #f1f3f6;
+      margin: 0;
+      padding: 0;
+    }
+    .dashboard-wrapper {
+      max-width: 1200px;
+      margin: 30px auto;
+      padding: 20px;
+      background: #fff;
+      box-shadow: 0 0 15px rgba(0,0,0,0.05);
+    }
+    .chart-section {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 30px;
+    }
+    .chart-container {
+      flex: 1 1 48%;
+    }
+    h2 {
+      font-size: 1.2rem;
+      border-left: 5px solid #2980b9;
+      padding-left: 10px;
+      color: #34495e;
+    }
+    canvas {
+      width: 100% !important;
+      max-height: 320px;
+    }
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      margin-top: 25px;
+      font-size: 0.9rem;
+    }
+    th, td {
+      border: 1px solid #dcdcdc;
+      padding: 8px 12px;
+      text-align: center;
+    }
+    th {
+      background-color: #ecf0f1;
+    }
+    tr:nth-child(even) {
+      background-color: #f9f9f9;
+    }
+  </style>
+</head>
+<body>
+  <div class="dashboard-wrapper">
+    <div class="chart-section">
+      <div class="chart-container">
+        <h2>📊 平均速率对比柱状图</h2>
+        <canvas id="trafficBarChart"></canvas>
+      </div>
+      <div class="chart-container">
+        <h2>📈 IP流量变化趋势图</h2>
+        <canvas id="trendLineGraph"></canvas>
+      </div>
+    </div>
+
+    <h2>📋 流量统计汇总表</h2>
+    <table>
+      <thead>
+        <tr>
+          <th>IP地址</th>
+          <th>方向</th>
+          <th>累计字节</th>
+          <th>峰值速率</th>
+          <th>平均10s</th>
+          <th>平均20s</th>
+          <th>平均30s</th>
+        </tr>
+      </thead>
+      <tbody id="flowTableBody"></tbody>
+    </table>
+  </div>
+
+  <script>
+    let trafficBarChart, trendLineGraph;
+
+    function pickColor(index) {
+      const palette = [
+        '#3498db', '#2ecc71', '#e67e22', '#9b59b6',
+        '#1abc9c', '#e74c3c', '#7f8c8d', '#34495e'
+      ];
+      return palette[index % palette.length];
+    }
+
+    async function updateVisualization() {
+      const res = await fetch("data.json");
+      const stats = await res.json();
+
+      const ipLabels = stats.map(e => `${e.ip} (${e.dir})`);
+      const avg10List = stats.map(e => e.avg10 || 0);
+      const avg20List = stats.map(e => e.avg20 || 0);
+      const avg30List = stats.map(e => e.avg30 || 0);
+
+      // --- 柱状图 ---
+      if (!trafficBarChart) {
+        trafficBarChart = new Chart(document.getElementById("trafficBarChart").getContext("2d"), {
+          type: "bar",
+          data: {
+            labels: ipLabels,
+            datasets: [
+              { label: "10秒平均", backgroundColor: "#3498db", data: avg10List },
+              { label: "20秒平均", backgroundColor: "#2ecc71", data: avg20List },
+              { label: "30秒平均", backgroundColor: "#f39c12", data: avg30List }
+            ]
+          },
+          options: {
+            plugins: {
+              legend: { position: "top" }
+            },
+            responsive: true,
+            maintainAspectRatio: false
+          }
+        });
+      } else {
+        trafficBarChart.data.labels = ipLabels;
+        trafficBarChart.data.datasets[0].data = avg10List;
+        trafficBarChart.data.datasets[1].data = avg20List;
+        trafficBarChart.data.datasets[2].data = avg30List;
+        trafficBarChart.update();
+      }
+
+      // --- 折线图 ---
+      const timeLabels = Array.from({ length: 40 }, (_, i) => `第${i + 1}次`);
+      const trendSets = stats.map((flow, idx) => ({
+        label: `${flow.ip} (${flow.dir})`,
+        data: flow.bytes || [],
+        borderColor: pickColor(idx),
+        backgroundColor: pickColor(idx),
+        pointRadius: 4,
+        pointStyle: 'circle',
+        borderWidth: 2,
+        tension: 0.25,
+        fill: false
+      }));
+
+      if (!trendLineGraph) {
+        trendLineGraph = new Chart(document.getElementById("trendLineGraph").getContext("2d"), {
+          type: "line",
+          data: {
+            labels: timeLabels,
+            datasets: trendSets
+          },
+          options: {
+            responsive: true,
+            maintainAspectRatio: false,
+            plugins: {
+              legend: {
+                display: true,
+                position: 'top',  // 默认顶部，再结合 padding 和 align 调整
+                align: 'end',     // 靠右
+                labels: {
+                  usePointStyle: true,
+                  pointStyle: 'circle',
+                  boxWidth: 12,
+                  boxHeight: 12,
+                  padding: 10
+                }
+              }
+            },
+            layout: {
+              padding: {
+                top: 20,
+                right: 20
+              }
+            },
+            scales: {
+              y: {
+                title: { display: true, text: "速率 (B/s)" }
+              },
+              x: {
+                title: { display: true, text: "时间片编号" }
+              }
+            }
+          }
+        });
+      } else {
+        trendLineGraph.data.labels = timeLabels;
+        trendLineGraph.data.datasets = trendSets;
+        trendLineGraph.update();
+      }
+
+      // --- 表格更新 ---
+      const table = document.getElementById("flowTableBody");
+      table.innerHTML = "";
+      stats.forEach(flow => {
+        const row = `
+        <tr>
+          <td>${flow.ip}</td>
+          <td>${flow.dir}</td>
+          <td>${flow.total ?? '-'}</td>
+          <td>${flow.peak ?? '-'}</td>
+          <td>${flow.avg10 ?? '-'}</td>
+          <td>${flow.avg20 ?? '-'}</td>
+          <td>${flow.avg30 ?? '-'}</td>
+        </tr>`;
+        table.insertAdjacentHTML("beforeend", row);
+      });
+    }
+
+    setInterval(updateVisualization, 2000);
+    updateVisualization();
+  </script>
+</body>
+</html>
